@@ -239,7 +239,7 @@ class TestPhyloLMNoMLM(unittest.TestCase):
             num_rows=R, num_cols=C, num_blocks=2, h_dim=H,
             num_heads=HEADS, dropout=0.1
         )
-        self.x = torch.randn(B, R, C, H)
+        self.x = torch.randint(0, 21, (B, R, C))
 
     def test_output_shape(self):
         out = self.model(self.x)
@@ -256,14 +256,13 @@ class TestPhyloLMNoMLM(unittest.TestCase):
         self.assertTrue(torch.allclose(out1, out2))
 
     def test_gradient_flow(self):
-        x = self.x.requires_grad_(True)
-        out = self.model(x)
+        out = self.model(self.x)
         out.sum().backward()
-        self.assertIsNotNone(x.grad)
+        self.assertIsNotNone(self.model.embedding.weight.grad)
 
     def test_different_batch_sizes(self):
         for b in [1, 3]:
-            x = torch.randn(b, R, C, H)
+            x = torch.randint(0, 21, (b, R, C))
             out = self.model(x)
             self.assertEqual(out.shape, (b, NUM_PAIRS))
 

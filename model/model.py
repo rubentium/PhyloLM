@@ -16,19 +16,23 @@ class PhyloLM(nn.Module):
     def __init__(self, num_rows, num_cols, num_blocks, h_dim, num_heads, dropout=0.1):
         super(PhyloLM, self).__init__()
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.embedding = nn.Embedding(21, h_dim)  # 20 amino acids + gap token
         self.pair_matrix = pair_matrix(num_rows, device=device)
         self.blocks = nn.ModuleList([
             Axial_Transformer(h_dim, num_heads, dropout) for _ in range(num_blocks)
         ])
+        
+        # dont ask me why i gave these two ffns these weird names, i just felt like it ¯\_(ツ)_/¯
         self.penultimate_ffn = nn.Sequential(
             nn.Linear(h_dim, h_dim * 4),
             nn.GELU(),
             nn.Linear(h_dim * 4, 1)
         )
-        self.ultimate_ffn = nn.Linear(num_cols, 1)  # dont ask me why i gave these two ffns these weird names, i just felt like it
+        self.ultimate_ffn = nn.Linear(num_cols, 1)
 
     def forward(self, x, mask=None):
-        # input is (B, R, C, H)
+        # input is (B, R, C)
+        x = self.embedding(x)  # (B, R, C, H)
         x = x.permute(0, 3, 1, 2)  # (B, H, R, C)
         x = self.pair_matrix @ x   # (B, H, num_pairs, C)
         x = x.permute(0, 2, 3, 1)  # (B, num_pairs, C, H)
