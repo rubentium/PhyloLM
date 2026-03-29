@@ -1,15 +1,15 @@
 import os
 import re
-import logging
-from itertools import combinations
-from turtle import st
-
+import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+import logging
 import dendropy
+from itertools import combinations
+from concurrent.futures import ProcessPoolExecutor
+from transformers import AutoTokenizer
+from torch.utils.data import Dataset, DataLoader
 
 logger = logging.getLogger(__name__)
-
 
 # tokenizer
 
@@ -23,9 +23,16 @@ class Tokenizer:
     returns:
         LongTensor of shape (R, C) where C is the alignment length
     """
+    
+    def __init__(self):
+        self.tokenizer = AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
 
-    def encode(self, sequences: list[str]) -> torch.Tensor:
-        raise NotImplementedError("Tokenizer.encode() must be implemented")
+    def encode(self, sequences):
+        tokenized = self.tokenizer(sequences, padding=True, truncation=True, return_tensors="pt")
+        return tokenized.input_ids
+    
+    def __len__(self):
+        return len(self.tokenizer)
 
 
 # file discovery
@@ -36,8 +43,8 @@ def discover_pairs(alignment_dir, tree_dir):
     of the form {id}_50.fasta and {id}_50.nwck — any unpaired files are dropped with a warning
     returns a sorted list of (fasta_path, nwck_path) tuples
     """
-    fasta_pattern = re.compile(r"^(.+)_50\.fasta$")
-    nwck_pattern = re.compile(r"^(.+)_50\.nwck$")
+    fasta_pattern = re.compile(r"^(.+)_50_tips\.fasta$")
+    nwck_pattern = re.compile(r"^(.+)_50_tips\.nwk$")
 
     fasta_ids = {}
     for fname in os.listdir(alignment_dir):
@@ -126,41 +133,59 @@ def compute_pairwise_distances(nwck_path, leaf_order):
         t_j = taxon_map[leaf_order[j]]
         distances.append(pdm(t_i, t_j))
 
-    return torch.tensor(distances, dtype=torch.float32)
+    return np.array(distances, dtype=np.float32)
+
+
+# preprocessing worker (module-level so it is picklable by ProcessPoolExecutor)
+
+def _preprocess_one(item):
+    """parse one fasta/newick pair and compute pairwise distances — runs in a worker process"""
+    fasta_path, nwck_path = item
+    entries = parse_fasta(fasta_path)
+    names = [name for name, _ in entries]
+    sequences = [seq for _, seq in entries]
+    distances = compute_pairwise_distances(nwck_path, names)
+    return sequences, distances
 
 
 # dataset
 
 class PhyloDataset(Dataset):
     """
-    dataset that pairs fasta alignments with newick-derived pairwise distance targets
+    dataset that pairs fasta alignments with newick-derived pairwise distance targets.
+    all parsing, distance computation, and tokenization are performed eagerly at
+    construction time using a multiprocessing pool so the GPU does not idle at runtime.
     arguments:
-        alignment_dir: directory containing {id}_50.fasta files
-        tree_dir:      directory containing {id}_50.nwck files
-        tokenizer:     a Tokenizer instance used to encode sequences
+        alignment_dir:          directory containing {id}_50_tips.fasta files
+        tree_dir:               directory containing {id}_50_tips.nwk files
+        tokenizer:              a Tokenizer instance used to encode sequences
+        num_preprocess_workers: worker processes for parallel preprocessing
+                                (defaults to os.cpu_count())
     each sample returns:
-        alignment : LongTensor of shape (R, C)     tokenised alignment
+        alignment : LongTensor of shape (R, C)       tokenised alignment
         distances : FloatTensor of shape (num_pairs,) patristic distances
     """
 
-    def __init__(self, alignment_dir, tree_dir, tokenizer: Tokenizer):
-        self.pairs = discover_pairs(alignment_dir, tree_dir)
-        self.tokenizer = tokenizer
+    def __init__(self, alignment_dir, tree_dir, tokenizer: Tokenizer, num_preprocess_workers = 0):
+        pairs = discover_pairs(alignment_dir, tree_dir)
+        n_workers = num_preprocess_workers if num_preprocess_workers > 0 else len(os.sched_getaffinity(0))
 
-    def __len__(self) -> int:
-        return len(self.pairs)
+        logger.info("Preprocessing %d samples with %d worker processes...", len(pairs), n_workers)
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            raw = pool.map(_preprocess_one, pairs, chunksize=max(1, len(pairs) // (n_workers * 4)))
+
+        logger.info("Tokenizing %d samples...", len(raw))
+        self.data = [
+            (tokenizer.encode(sequences), torch.from_numpy(distances))
+            for sequences, distances in raw
+        ]
+        logger.info("Dataset ready — %d samples loaded into memory", len(self.data))
+
+    def __len__(self):
+        return len(self.data)
 
     def __getitem__(self, idx: int):
-        fasta_path, nwck_path = self.pairs[idx]
-
-        entries = parse_fasta(fasta_path)
-        names = [name for name, _ in entries]
-        sequences = [seq for _, seq in entries]
-
-        alignment = self.tokenizer.encode(sequences)          # (R, C)
-        distances = compute_pairwise_distances(nwck_path, names)  # (num_pairs,)
-
-        return alignment, distances
+        return self.data[idx]
 
 
 # dataloader factory
@@ -173,24 +198,35 @@ def create_dataloaders(
     tokenizer: Tokenizer,
     batch_size = 32,
     num_workers = 0,
+    num_preprocess_workers = 0,
 ):
     """
     builds train and val dataloaders from the four data directories
     arguments:
-        train_alignment_dir: path to train/alignment
-        train_tree_dir:      path to train/trees
-        val_alignment_dir:   path to val/alignment
-        val_tree_dir:        path to val/trees
-        tokenizer:           a Tokenizer instance
-        batch_size:          samples per batch
-        num_workers:         dataloader worker processes
+        train_alignment_dir:    path to train/alignment
+        train_tree_dir:         path to train/trees
+        val_alignment_dir:      path to val/alignment
+        val_tree_dir:           path to val/trees
+        tokenizer:              a Tokenizer instance
+        batch_size:             samples per batch
+        num_workers:            dataloader worker processes
+        num_preprocess_workers: worker processes for parallel preprocessing
+                                (defaults to os.cpu_count())
     returns:
         (train_loader, val_loader)
     """
-    train_ds = PhyloDataset(train_alignment_dir, train_tree_dir, tokenizer)
-    val_ds = PhyloDataset(val_alignment_dir, val_tree_dir, tokenizer)
+    train_ds = PhyloDataset(train_alignment_dir, train_tree_dir, tokenizer,
+                            num_preprocess_workers=num_preprocess_workers)
+    val_ds = PhyloDataset(val_alignment_dir, val_tree_dir, tokenizer,
+                          num_preprocess_workers=num_preprocess_workers)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    persistent = num_workers > 0
+    # val loader uses fewer workers — validation only needs ~30 samples at a time
+    val_workers = min(num_workers, 2)
+    val_persistent = val_workers > 0
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                              persistent_workers=persistent, prefetch_factor=1 if persistent else None)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=val_workers,
+                            persistent_workers=val_persistent, prefetch_factor=1 if val_persistent else None)
 
     return train_loader, val_loader

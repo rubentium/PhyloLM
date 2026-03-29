@@ -1,2 +1,7 @@
-torch
-dendropy
+torch>=2.11.0
+dendropy>=5.0.8
+transformers>=5.4.0
+wandb>=0.25.1
+torchinfo>=1.8.0
+numpy>=2.0.0
+ignite>=1.1.0

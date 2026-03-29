@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model.rope import RotaryEmbedding, apply_rotary_emb
+from model.rope import RotaryEmbedding
 
 class Attention(nn.Module):
     """
@@ -13,7 +13,7 @@ class Attention(nn.Module):
         dropout: dropout rate for attention probabilities
         use_rope: whether to apply rotary position embeddings to queries and keys
     """
-    def __init__(self, h_dim, num_heads, dropout=0.1, use_rope=True):
+    def __init__(self, h_dim, num_heads, seq_len, dropout=0.1, use_rope=True):
         super(Attention, self).__init__()
         assert h_dim % num_heads == 0, "Hidden dimension must be divisible by number of heads"
         self.num_heads = num_heads
@@ -24,7 +24,7 @@ class Attention(nn.Module):
         self.value = nn.Linear(h_dim, h_dim)
         self.out = nn.Linear(h_dim, h_dim)
         self.dropout = nn.Dropout(dropout)
-        self.rope = RotaryEmbedding(self.head_dim) if use_rope else None
+        self.rope = RotaryEmbedding(self.head_dim, seq_len=seq_len, device='cuda' if torch.cuda.is_available() else 'cpu') if use_rope else None
 
     def forward(self, x, mask=None):
         batch_size, rows, cols, h_dim = x.size()
@@ -34,17 +34,16 @@ class Attention(nn.Module):
         v = self.value(x).view(batch_size, rows, cols, self.num_heads, self.head_dim).transpose(2, 3)  # (B, R, H, C, D)
 
         if self.rope is not None:
-            cos, sin = self.rope(cols, device=x.device)  # (C, D)
-            q, k = apply_rotary_emb(q, k, cos, sin)
+            q, k = self.rope(q, k)  # (C, D)
 
-        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)  # (B, R, H, C, C)
-        
-        if mask is not None:
-            attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))
-        
-        attn_probs = F.softmax(attn_scores, dim=-1)
-        attn_probs = self.dropout(attn_probs)
-        out = torch.matmul(attn_probs, v)  # (B, H, R, C, D)
+        attn_mask = mask.bool() if mask is not None else None
+        # SDPA only dispatches Flash/mem-efficient attention for 4D tensors (B, H, S, D).
+        # Our tensors are 5D (B, extra, H, S, D), so we flatten the leading two dims first.
+        q = q.flatten(0, 1)  # (B*rows, H, S, D)
+        k = k.flatten(0, 1)
+        v = v.flatten(0, 1)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout.p if self.training else 0.0)
+        out = out.view(batch_size, rows, self.num_heads, cols, self.head_dim)
         out = out.transpose(2, 3).contiguous().view(batch_size, rows, cols, h_dim)
         out = self.out(out)
         return out
@@ -61,10 +60,10 @@ class Axial_Transformer(nn.Module):
         dropout: dropout rate for attention probabilities
         use_rope: whether to apply rotary position embeddings (default True)
     """
-    def __init__(self, h_dim, num_heads, dropout=0.1, use_rope=True):
+    def __init__(self, h_dim, num_heads, rows, cols, dropout=0.1, use_rope=True):
         super(Axial_Transformer, self).__init__()
-        self.row_attention = Attention(h_dim, num_heads, dropout, use_rope)
-        self.col_attention = Attention(h_dim, num_heads, dropout, use_rope)
+        self.row_attention = Attention(h_dim, num_heads, rows, dropout, use_rope=False)  # no rope for row attention since it operates on pairs, not sequences
+        self.col_attention = Attention(h_dim, num_heads, cols, dropout, use_rope)
         
         self.row_norm = nn.LayerNorm(h_dim)
         self.col_norm = nn.LayerNorm(h_dim)
@@ -79,13 +78,13 @@ class Axial_Transformer(nn.Module):
     def forward(self, x, mask=None):
         # apply row-wise attention
         row_x = self.row_norm(x)
-        row_attn_out = self.row_attention(row_x, mask)
-        x = x + row_attn_out
+        row_attn_out = self.row_attention(row_x.transpose(1, 2), mask)
+        x = x + row_attn_out.transpose(1, 2)
 
         # apply column-wise attention
         col_x = self.col_norm(x)
-        col_attn_out = self.col_attention(col_x.transpose(1, 2), mask)
-        x = x + col_attn_out.transpose(1, 2)
+        col_attn_out = self.col_attention(col_x, mask)
+        x = x + col_attn_out
         
         # apply feedforward network
         ffn_x = self.ffn_norm(x)
