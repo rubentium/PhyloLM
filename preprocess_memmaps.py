@@ -43,7 +43,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # make sure the package root is on the path so we can import model.data
 sys.path.insert(0, os.path.dirname(__file__))
-from model.data import discover_pairs, _preprocess_one, Tokenizer
+from .data import discover_pairs, _preprocess_one, Tokenizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,10 +56,6 @@ try:
     mp.set_sharing_strategy('file_system')
 except RuntimeError:
     pass
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
 
 def _distances_to_int16(distances: np.ndarray) -> np.ndarray:
     """
@@ -78,46 +74,37 @@ def _write_split(
 ) -> dict:
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. Discover pairs
     pairs = discover_pairs(alignment_dir, tree_dir)
     n_samples = len(pairs)
     if n_samples == 0:
         raise RuntimeError(f"No matched pairs in {alignment_dir}")
 
-    # 2. Peek at first sample to get shapes for pre-allocation
     logger.info("[%s] Peeking at first sample to determine shapes...", out_dir)
     first_seqs, first_dist = _preprocess_one(pairs[0])
     first_ids = tokenizer.encode(first_seqs)
     R, C = first_ids.shape
     P = first_dist.shape[0]
 
-    # 3. Create memmaps immediately (Pre-allocate)
     align_path = os.path.join(out_dir, "alignments.dat")
     trees_path  = os.path.join(out_dir, "trees.dat")
     align_mm = np.memmap(align_path, dtype=np.int8,  mode="w+", shape=(n_samples, R, C))
     trees_mm  = np.memmap(trees_path, dtype=np.int16, mode="w+", shape=(n_samples, P))
 
-    # 4. Process and write INCREMENTALLY
     logger.info("[%s] Preprocessing %d samples with %d workers...", out_dir, n_samples, num_workers)
     
     with ProcessPoolExecutor(max_workers=num_workers) as pool:
-        # We use pool.map, but we iterate over it. 
-        # This acts as a generator so we don't hold 200k samples in RAM.
         chunksize = max(1, n_samples // (num_workers * 4))
         results = pool.map(_preprocess_one, pairs, chunksize=chunksize)
 
         for i, (sequences, distances) in enumerate(results):
-            # Tokenize in the main process
             ids = tokenizer.encode(sequences)
             
-            # Write directly to the memmap
             align_mm[i] = ids.numpy().astype(np.int8)
             trees_mm[i] = _distances_to_int16(distances)
 
             if (i + 1) % 1000 == 0:
                 logger.info("[%s] Written %d / %d samples", out_dir, i + 1, n_samples)
 
-    # 5. Flush and Metadata (same as your original)
     align_mm.flush()
     trees_mm.flush()
     del align_mm, trees_mm
@@ -131,11 +118,6 @@ def _write_split(
         json.dump(meta, f, indent=2)
 
     return meta
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def parse_args():
     p = argparse.ArgumentParser(
