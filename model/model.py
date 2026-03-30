@@ -15,9 +15,8 @@ class PhyloLM(nn.Module):
     """
     def __init__(self, num_rows, num_cols, num_blocks, h_dim, num_heads, vocab_size, dropout=0.1):
         super(PhyloLM, self).__init__()
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.embedding = nn.Embedding(vocab_size, h_dim)  # esm2 vocab size
-        self.pair_matrix = pair_matrix(num_rows, device=device)
+        self.register_buffer('pair_matrix', pair_matrix(num_rows))
         num_pairs = self.pair_matrix.size(0)
         self.blocks = nn.ModuleList([
             Axial_Transformer(h_dim, num_heads, num_pairs, num_cols, dropout) for _ in range(num_blocks)
@@ -38,12 +37,12 @@ class PhyloLM(nn.Module):
         x = self.pair_matrix @ x   # (B, H, num_pairs, C)
         x = x.permute(0, 2, 3, 1)  # (B, num_pairs, C, H)
         for block in self.blocks:
-            x = block(x, mask)
+            x = torch.utils.checkpoint.checkpoint(block, x, mask, use_reentrant=False)
         x = self.penultimate_ffn(x).squeeze(-1)  # (B, num_pairs, C)
         x = self.ultimate_ffn(x).squeeze(-1)  # (B, num_pairs)
         return x
     
-def pair_matrix(rows, device):
+def pair_matrix(rows):
     """
     generates a pairwise mask for the input sequences to be used in the attention mechanism
     """
@@ -51,5 +50,4 @@ def pair_matrix(rows, device):
     num_pairs = pairs.size(0)
     mask = torch.zeros((num_pairs, rows))
     mask.scatter_(1, pairs, 1.0)
-    mask = mask.to(device, dtype=torch.bfloat16)
-    return mask
+    return mask.to(dtype=torch.bfloat16)
