@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torchinfo import summary
 
-from model.data import Tokenizer
+from .data import Tokenizer
 from model.memmap_data import create_memmap_dataloaders
 from model.model import PhyloLM
 

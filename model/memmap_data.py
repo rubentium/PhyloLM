@@ -40,10 +40,10 @@ _PIN = torch.cuda.is_available()
 
 class MemmapBatchIterator:
     """
-    Reads whole batches directly from np.memmap files, converts dtypes in
-    bulk, and optionally pins memory for non_blocking GPU transfer.
+    reads whole batches directly from np.memmap files, converts dtypes in
+    bulk, and optionally pins memory for non_blocking GPU transfer
 
-    Arguments:
+    arguments:
         split_dir  : directory with meta.json, alignments.dat, trees.dat
         batch_size : samples per batch
         shuffle    : whether to shuffle indices each epoch
@@ -66,8 +66,8 @@ class MemmapBatchIterator:
         meta_path = os.path.join(split_dir, "meta.json")
         if not os.path.isfile(meta_path):
             raise FileNotFoundError(
-                f"meta.json not found in {split_dir!r}. "
-                "Run preprocess_memmaps.py first."
+                f"meta.json not found in {split_dir!r}."
+                "Run preprocess_memmaps.py first"
             )
 
         with open(meta_path) as f:
@@ -116,14 +116,13 @@ class MemmapBatchIterator:
         self._pin = pin_memory
         self._rng = np.random.default_rng(seed)
 
-        # prepare first epoch
         self._order = self._valid_indices.copy()
         if self._shuffle:
             self._rng.shuffle(self._order)
         self._pos = 0
 
     def _reset(self):
-        """Reshuffle (if needed) and rewind to the start of the epoch."""
+        """reshuffle (if needed) and rewind to the start of the epoch"""
         self._order = self._valid_indices.copy()
         if self._shuffle:
             self._rng.shuffle(self._order)
@@ -146,8 +145,6 @@ class MemmapBatchIterator:
             indices = self._order[self._pos:end]
             self._pos = end
 
-            # --- bulk memmap read + dtype conversion ----------------------
-            # np.array() copies the slice out of the memmap in one read
             align_np = np.array(self._alignments[indices])   # (B, R, C) int8
             trees_np = np.array(self._trees[indices])         # (B, P)    int16
 
@@ -161,7 +158,7 @@ class MemmapBatchIterator:
             return alignment, distances
 
     def __len__(self):
-        """Number of batches per epoch."""
+        """number of batches per epoch."""
         n = self.num_samples
         if self._drop_last:
             return n // self._batch_size
@@ -170,11 +167,11 @@ class MemmapBatchIterator:
 
 class PrefetchIterator:
     """
-    Wraps any iterator and fetches ahead on a daemon thread.
-    Uses a bounded queue so at most *bufsize* batches sit in CPU memory.
+    wraps any iterator and fetches ahead on a daemon thread.
+    Uses a bounded queue so at most *bufsize* batches sit in CPU memory
 
-    Because this is thread-based (not process-based), tensors live on the
-    regular process heap — /dev/shm is never touched.
+    because this is thread-based (not process-based), tensors live on the
+    regular process heap — /dev/shm is never touched
     """
 
     _SENTINEL = object()
@@ -230,21 +227,21 @@ def create_memmap_dataloaders(
     prefetch: int = 2,
 ):
     """
-    Build train and val batch iterators from a memmap directory produced by
-    preprocess_memmaps.py.
+    build train and val batch iterators from a memmap directory produced by
+    preprocess_memmaps.py
 
-    All IO happens via a background thread — no multiprocessing workers
-    and no /dev/shm usage (safe with 64 MB shm).
+    all IO happens via a background thread, no multiprocessing workers
+    and no /dev/shm usage (safe with 64 MB shm)
 
-    Arguments:
+    arguments:
         memmap_dir : root directory containing ``train/`` and ``val/`` sub-dirs.
-        batch_size : samples per batch.
+        batch_size : samples per batch
         seed       : RNG seed for reproducible shuffling.
-        prefetch   : number of batches to prefetch (0 disables prefetching).
+        prefetch   : number of batches to prefetch (0 disables prefetching)
 
-    Returns:
-        (train_iter, val_iter) — both are infinite cycling iterators.
-        Access .num_rows, .num_cols, .num_samples on either for metadata.
+    returns:
+        (train_iter, val_iter) both are infinite cycling iterators
+        Access .num_rows, .num_cols, .num_samples on either for metadata
     """
     train_iter = MemmapBatchIterator(
         os.path.join(memmap_dir, "train"),
