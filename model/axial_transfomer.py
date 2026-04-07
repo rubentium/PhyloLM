@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from model.rope import RotaryEmbedding
+from .rope import RotaryEmbedding
 
 class Attention(nn.Module):
     """
@@ -27,6 +27,11 @@ class Attention(nn.Module):
         self.rope = RotaryEmbedding(self.head_dim, seq_len=seq_len, device='cuda' if torch.cuda.is_available() else 'cpu') if use_rope else None
 
     def forward(self, x, mask=None):
+        """
+        this is the flash attention implementation of attanetion due to
+        axial attention it's near impossible to scale the model to anything beyond 
+        a few hundred thousand parameters even on 80GB VRAM H100s
+        """
         batch_size, rows, cols, h_dim = x.size()
 
         q = self.query(x).view(batch_size, rows, cols, self.num_heads, self.head_dim).transpose(2, 3)  # (B, R, H, C, D)
@@ -38,12 +43,36 @@ class Attention(nn.Module):
 
         attn_mask = mask.bool() if mask is not None else None
         # SDPA only dispatches Flash/mem-efficient attention for 4D tensors (B, H, S, D).
-        # Our tensors are 5D (B, extra, H, S, D), so we flatten the leading two dims first.
+        # the tensors are 5D (B, extra, H, S, D), so we flatten the leading two dims first.
         q = q.flatten(0, 1)  # (B*rows, H, S, D)
         k = k.flatten(0, 1)
         v = v.flatten(0, 1)
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout.p if self.training else 0.0)
         out = out.view(batch_size, rows, self.num_heads, cols, self.head_dim)
+        out = out.transpose(2, 3).contiguous().view(batch_size, rows, cols, h_dim)
+        out = self.out(out)
+        return out
+    
+    def vanilla_forward(self, x, mask=None):
+        """
+        this is the vanilla implementation to show that i can write it myself, it's not
+        intended for training as flash attention is much faster and memory efficient
+        """
+        batch_size, rows, cols, h_dim = x.size()
+        
+        q = self.query(x).view(batch_size, rows, cols, self.num_heads, self.head_dim).transpose(2, 3)  # (B, R, H, C, D)
+        k = self.key(x).view(batch_size, rows, cols, self.num_heads, self.head_dim).transpose(2, 3)    # (B, R, H, C, D)
+        v = self.value(x).view(batch_size, rows, cols, self.num_heads, self.head_dim).transpose(2, 3)  # (B, R, H, C, D)
+        
+        if self.rope is not None:
+            q, k = self.rope(q, k)  # (C, D)
+            
+        attn_scores = q @ k.transpose(-2, -1) / (self.head_dim ** 0.5)  # (B, R, H, C, C)
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill(mask.unsqueeze(1).unsqueeze(2) == 0, float('-inf'))
+        attn_probs = F.softmax(attn_scores, dim=-1)  # (B, R, H, C, C)
+        attn_probs = self.dropout(attn_probs)
+        out = attn_probs @ v  # (B, R, H, C, D)
         out = out.transpose(2, 3).contiguous().view(batch_size, rows, cols, h_dim)
         out = self.out(out)
         return out

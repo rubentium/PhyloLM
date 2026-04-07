@@ -1,8 +1,8 @@
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
-from PhyloLM.data import Tokenizer
-from model.memmap_data import create_memmap_dataloaders
-from model.model import PhyloLM
+from .data import Tokenizer
+from .model.memmap_data import create_memmap_dataloaders
+from .model.model import PhyloLM
 
 def run_profile(args):
     device = torch.device("cuda")

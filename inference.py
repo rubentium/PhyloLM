@@ -1,16 +1,18 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import argparse
 
-from data import Tokenizer, parse_fasta
-from model.model import PhyloLM
+from PhyloLM.data import Tokenizer, parse_fasta
+from PhyloLM.model.model import PhyloLM
 
 def load_model(checkpoint_path, num_rows, num_cols, vocab_size, device):
 
     """
     Load trained model from checkpoint.
     """
-
-    print("DEBUG config:", num_rows, num_cols, 10, 128, 8)
 
     model = PhyloLM(
         num_rows = num_rows,
@@ -36,7 +38,7 @@ def load_model(checkpoint_path, num_rows, num_cols, vocab_size, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta_path", type = str, required = True, help = "Path to input MSA (.fasta)")
+    parser.add_argument("--fasta_path", type = str, default = "", help = "Path to input MSA (.fasta)")
     parser.add_argument("--checkpoint", type = str, required = True, help = "Path to model checkpoint")
     parser.add_argument("--output", type = str, default = "distances.pt", help = "Output file for predictions")
     args = parser.parse_args()
@@ -74,7 +76,7 @@ def main():
     torch.save(preds, args.output)
 
     print(f"Saved predicted distances to {args.output}")
-    print(f"Output shape: {preds.shape}")
+    print(preds)
 
 if __name__ == "__main__":
     main()
