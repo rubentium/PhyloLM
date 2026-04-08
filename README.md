@@ -121,11 +121,11 @@ Pairwise Representation: (P x (L+2) x d_model)
       |
       v
 Axial Transformer Stack
-   - site-wise attention
-   - pair-wise / row-wise attention
-   - Pre-Norm blocks
-   - Flash Attention
-   - RoPE on site-wise attention
+   - Pre-Norm row
+   - site-wise / row-wise attention (with RoPE)
+   - Pre-Norm col
+   - pair-wise / column-wise attention
+   - FFN
       |
       v
 Distance Prediction Head
