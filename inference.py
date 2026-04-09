@@ -38,8 +38,8 @@ def load_model(checkpoint_path, num_rows, num_cols, vocab_size, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta_path", type = str, default = "", help = "Path to input MSA (.fasta)")
-    parser.add_argument("--checkpoint", type = str, required = True, help = "Path to model checkpoint")
+    parser.add_argument("--fasta_path", type = str, default = "/Users/bettyzhang/Desktop/wetransfer_lg-gc_2026-04-07_0337 (1)/mini_alignments/100_50_tips.fasta", help = "Path to input MSA (.fasta)")
+    parser.add_argument("--checkpoint", type = str, default = "/Users/bettyzhang/Desktop/Github/PhyloLM/checkpoints/checkpoint_5000.pt", help = "Path to model checkpoint")
     parser.add_argument("--output", type = str, default = "distances.pt", help = "Output file for predictions")
     args = parser.parse_args()
 
@@ -53,6 +53,7 @@ def main():
     alignment = tokenizer.encode(sequences)
 
     num_rows, num_cols = alignment.shape
+    print(num_rows, num_cols)
 
     alignment = alignment.unsqueeze(0).to(device)
 
@@ -65,10 +66,12 @@ def main():
         device = device,
     )
 
+    model = model.to(torch.bfloat16)
+
     # ================== inference ==================
     with torch.no_grad():
-        with torch.autocast(device.type, dtype = torch.bfloat16 if device.type == "cuda" else torch.float32):
-            preds = model(alignment)
+        # with torch.autocast(device.type, dtype = torch.bfloat16 if device.type == "cuda" else torch.float32):
+        preds = model(alignment)
 
     preds = preds.squeeze(0).cpu()
 
@@ -78,7 +81,6 @@ def main():
     print(f"Saved predicted distances to {args.output}")
     print(preds)
 
+
 if __name__ == "__main__":
     main()
-
-
