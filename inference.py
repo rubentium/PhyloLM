@@ -38,8 +38,8 @@ def load_model(checkpoint_path, num_rows, num_cols, vocab_size, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta_path", type = str, default = "/Users/bettyzhang/Desktop/wetransfer_lg-gc_2026-04-07_0337 (1)/mini_alignments/100_50_tips.fasta", help = "Path to input MSA (.fasta)")
-    parser.add_argument("--checkpoint", type = str, default = "/Users/bettyzhang/Desktop/Github/PhyloLM/checkpoints/checkpoint_5000.pt", help = "Path to model checkpoint")
+    parser.add_argument("--fasta_path", type = str, required=True, help = "Path to input MSA (.fasta)")
+    parser.add_argument("--checkpoint", type = str, required=True, help = "Path to model checkpoint")
     parser.add_argument("--output", type = str, default = "distances.pt", help = "Output file for predictions")
     args = parser.parse_args()
 
