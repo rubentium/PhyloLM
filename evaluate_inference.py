@@ -40,13 +40,13 @@ def save_phylip(preds, ids, out_file = "preds.phy"):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pred", type=str,
-                        default="/Users/bettyzhang/Desktop/Github/PhyloLM/distances.pt"
+                        required=True
                         )
     parser.add_argument("--tree", type = str, 
-                        default = "/Users/bettyzhang/Desktop/wetransfer_lg-gc_2026-04-07_0337 (1)/mini_trees/100_50_tips.nwk"
+                        required=True
                         )
     parser.add_argument("--fasta", type=str,
-                        default="/Users/bettyzhang/Desktop/wetransfer_lg-gc_2026-04-07_0337 (1)/mini_alignments/100_50_tips.fasta"
+                        required=True
                         )
     args = parser.parse_args()
 
