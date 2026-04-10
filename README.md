@@ -32,15 +32,15 @@ python inference.py --input path/to/your_sequence.fasta
 
 ## Repository Structure
 
-* **`model/`**
+* `model/`
     * `model.py`: Full Phyloformer++ architecture and prediction head.
-    * **`memmap_data.py`**: Custom dataloader for `.dat` memory-mapped files.
+    * `memmap_data.py`: Custom dataloader for `.dat` memory-mapped files.
     * `attention.py`: Axial attention modules and Flash Attention support.
     * `rope.py`: Rotary Positional Embedding (RoPE) utilities.
     * `preprocessing.py`: Tokenization and input preparation logic.
-* **`train.py`**: Main entry point for the training loop and optimization.
-* **`inference.py`**: Script for predicting distances from individual FASTA files.
-* **`checkpoints/`**: Directory containing model checkpoints.
+* `train.py`: Main entry point for the training loop and optimization.
+* `inference.py`: Script for predicting distances from individual FASTA files.
+* `checkpoints/`: Directory containing model checkpoints.
 
 ---
 
@@ -52,7 +52,7 @@ PhyloLM reframes phylogenetic inference as a supervised regression problem. It p
 * **ESM2 Tokenization:** Modern protein language model tokenization.
 * **Learned Embeddings:** Captures biochemical similarity over simple one-hot encoding.
 * **RoPE:** Preserves relative positional relationships across alignment sites.
-* **Flash Attention:** Hardware-aware optimization for improved throughput.
+* **Flash Attention and Kernel Fusing:** Hardware-aware optimization for improved throughput.
 * **Pre-Norm:** Increases optimization stability for deeper stacks.
 
 ### Pipeline Flow
@@ -65,7 +65,7 @@ PhyloLM reframes phylogenetic inference as a supervised regression problem. It p
 
 ## Training Specifications
 
-* **Dataset:** Trained on the **LG+GC** dataset (empirical amino acid replacement + heterogeneity).
+* **Dataset:** Trained on the **LG+GC** [dataset](https://zenodo.org/records/13742527) (empirical amino acid replacement + heterogeneity).
 * **Loss Function:** Mean Relative Error (MRE), normalizing error relative to branch depth.
 * **Optimization:** Cosine annealing scheduler for smoother convergence.
 
@@ -74,6 +74,7 @@ PhyloLM reframes phylogenetic inference as a supervised regression problem. It p
 | **10.8M** | 10 | 256 | 16 |
 | **2.7M** | 10 | 128 | 8 |
 | **690K** | 10 | 64 | 4 |
+| **176k** | 10 | 32 | 2 |
 
 ---
 
