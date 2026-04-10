@@ -22,7 +22,7 @@ python train.py
 ```
 
 ### 3. Inference
-To run inference, provide individual `.fasta` files to the `inference.py` file. The model will automatically utilize the weights found in the `checkpoints/` folder:
+To run inference, provide individual `.fasta` files to the `inference.py` file. The model will automatically utilize the weights found in the `checkpoints/` folder. A mini inference dataset is provided; no need to use `preprocess_memmaps.py` as that's only for training:
 
 ```bash
 python inference.py --input path/to/your_sequence.fasta
