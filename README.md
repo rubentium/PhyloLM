@@ -536,7 +536,7 @@ The following model scales were studied:
 | 10.8M      | 10     | 256     | 16    |
 | 2.7M       | 10     | 128     | 8     |
 | 690K       | 10     | 64      | 4     |
-| 430K       | 6      | 64      | 4     |
+| 179K       | 10     | 32      | 2     |
 
 These comparisons suggest that both **depth** and **model width** play important roles in phylogenetic signal extraction.
 
