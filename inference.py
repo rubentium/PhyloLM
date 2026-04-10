@@ -38,14 +38,13 @@ def load_model(checkpoint_path, num_rows, num_cols, vocab_size, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta_path", type = str, required=True, help = "Path to input MSA (.fasta)")
-    parser.add_argument("--checkpoint", type = str, required=True, help = "Path to model checkpoint")
+    parser.add_argument("--fasta_path", type = str, default="inference_dataset/mini_alignments/100_50_tips.fasta", help = "Path to input MSA (.fasta)")
+    parser.add_argument("--checkpoint", type = str, default="checkpoints/checkpoint_5000.pt", help = "Path to model checkpoint")
     parser.add_argument("--output", type = str, default = "distances.pt", help = "Output file for predictions")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ================== load and parse MSA ==================
     entries = parse_fasta(args.fasta_path)
     sequences = [seq for _, seq in entries]
 
@@ -53,11 +52,10 @@ def main():
     alignment = tokenizer.encode(sequences)
 
     num_rows, num_cols = alignment.shape
-    print(num_rows, num_cols)
+    print(f"num_rows: {num_rows}, num_cols: {num_cols}")
 
     alignment = alignment.unsqueeze(0).to(device)
 
-    # ================== load model ==================
     model = load_model(
         args.checkpoint,
         num_rows = num_rows,
@@ -67,17 +65,12 @@ def main():
     )
 
     model = model.to(torch.bfloat16)
-
-    # ================== inference ==================
     with torch.no_grad():
-        # with torch.autocast(device.type, dtype = torch.bfloat16 if device.type == "cuda" else torch.float32):
         preds = model(alignment)
 
     preds = preds.squeeze(0).cpu()
 
-    # ================== save predictions ==================
     torch.save(preds, args.output)
-
     print(f"Saved predicted distances to {args.output}")
     print(preds)
 
