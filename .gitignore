@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+
+# VS Code
+.vscode/
+
+# Test cache and outputs
+.pytest_cache/
+*.log
+
+# Weights & Biases experiment logs
+wandb/
+
+# Tests
+/tests/
+
+# General files and folders
+files/
+folders/

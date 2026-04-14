@@ -17,3 +17,5 @@ config: {'memmap_dir': '/mloscratch/homes/navasard/protein_stuff/PhyloLM/../LG_G
 2026-04-07 20:18:27,084 INFO    MainThread:11823 [wandb_run.py:_redirect():2442] Wrapping output streams.
 2026-04-07 20:18:27,084 INFO    MainThread:11823 [wandb_run.py:_redirect():2465] Redirects installed.
 2026-04-07 20:18:27,086 INFO    MainThread:11823 [wandb_init.py:init():1082] run started, returning control to user process
+2026-04-08 01:14:19,868 INFO    wandb-AsyncioManager-main:11823 [service_client.py:_forward_responses():134] Reached EOF.
+2026-04-08 01:14:19,869 INFO    wandb-AsyncioManager-main:11823 [mailbox.py:close():155] Closing mailbox, abandoning 1 handles.
