@@ -17,6 +17,11 @@ from model.sparse_attention import _MASK_POOL_SIZE
 
 logger = logging.getLogger(__name__)
 
+# Dedicated RNG for sparse mask index selection, kept separate from the global
+# numpy RNG so that sparse and dense runs consume identical RNG streams
+# everywhere else (data loading, permutations, etc.).
+_mask_rng: np.random.RandomState | None = None
+
 # I CHANGED THE NUMBER OF RANDOM BLOCK TO 10 FOR DEBUGGING AND TURN ON TORCH.COMPILE
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -137,7 +142,7 @@ def run_validation(model, val_samples, criterion, device, args, global_step, ful
         alignment, distances = next(val_samples)
         alignment = alignment.to(device, non_blocking=True)
         distances = distances.to(device, non_blocking=True)
-        indices = np.random.randint(0, _MASK_POOL_SIZE, size=model.num_blocks) if model.att_type == "sparse" else None
+        indices = _mask_rng.randint(0, _MASK_POOL_SIZE, size=model.num_blocks) if model.att_type == "sparse" else None
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
             preds = model(alignment, sparse_indices=indices, full_att=full_att)
@@ -183,7 +188,9 @@ def run_validation(model, val_samples, criterion, device, args, global_step, ful
 
 
 def main():
+    global _mask_rng
     args = parse_args()
+    _mask_rng = np.random.RandomState(args.seed + 1)
     torch.manual_seed(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -244,7 +251,7 @@ def main():
         for _ in range(args.grad_accum_steps or 1):
             alignment, distances = next(train_samples)
             alignment, distances = alignment.to(device, non_blocking=True), distances.to(device, non_blocking=True)
-            indices = np.random.randint(0, _MASK_POOL_SIZE, size=args.num_blocks) if args.att_type == "sparse" else None
+            indices = _mask_rng.randint(0, _MASK_POOL_SIZE, size=args.num_blocks) if args.att_type == "sparse" else None
             
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 random_perm = None

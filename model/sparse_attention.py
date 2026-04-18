@@ -71,6 +71,19 @@ class SparseAttention(nn.Module):
             self._mask_pool = self._build_mask_pool(device)
 
     def _build_mask_pool(self, device: torch.device) -> list:
+        """Saves and restores the torch (and CUDA) RNG state around mask pool
+        construction so that the randperm calls used to assign random blocks do
+        not shift the global RNG stream used for weight initialisation of all
+        modules created after this one."""
+        rng_state = torch.random.get_rng_state()
+        cuda_rng_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+        pool = self._build_mask_pool_inner(device)
+        torch.random.set_rng_state(rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state(cuda_rng_state)
+        return pool
+
+    def _build_mask_pool_inner(self, device: torch.device) -> list:
         """Build _MASK_POOL_SIZE masks, each combining the diagonal block with
         num_random_blocks randomly chosen other blocks per query block.
 
@@ -128,11 +141,24 @@ class SparseAttention(nn.Module):
             idx = 0
 
         if full_att:
-            # full attention optimized for flash attention
-            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.drop.p if self.training else 0)
+            # exclude padded rows from full-attention when sparse mode uses padded pair tensors.
+            if mask is None and (self.padding[2] > 0 or self.padding[3] > 0):
+                valid = torch.zeros(seq_len, dtype=torch.bool, device=q.device)
+                valid[int(self.padding[2]): int(seq_len - self.padding[3])] = True
+                attn_mask = valid[:, None] & valid[None, :]
+            elif mask is not None:
+                attn_mask = mask.bool()
+            else:
+                attn_mask = None
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=self.drop.p if self.training else 0,
+            )
         else:
             block_mask = self._mask_pool[idx]
-            print(block_mask)
             out = flex_attention(q, k, v, block_mask=block_mask)
         out = out.transpose(1, 2).contiguous().view(batch_size, extra, seq_len, h_dim)
         return self.drop(self.out(out))
