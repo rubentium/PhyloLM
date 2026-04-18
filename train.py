@@ -17,6 +17,8 @@ from model.sparse_attention import _MASK_POOL_SIZE
 
 logger = logging.getLogger(__name__)
 
+# I CHANGED THE NUMBER OF RANDOM BLOCK TO 10 FOR DEBUGGING AND TURN ON TORCH.COMPILE
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # number of pre-generated masks to pool for random selection during training,
 # the memory they take up is a rounding error!
@@ -34,13 +36,15 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=1) # you will run out of GPU VRAM if you increase this
 
-    parser.add_argument("--num_blocks", type=int, default=16)
-    parser.add_argument("--h_dim", type=int, default=128)
-    parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--num_blocks", type=int, default=2)
+    parser.add_argument("--h_dim", type=int, default=32)
+    parser.add_argument("--num_heads", type=int, default=2)
     parser.add_argument("--att_type", type=str, default="sparse", choices=["sparse", "dense"])
     parser.add_argument("--num_random_blocks", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--permute_pairs", action="store_true")
+    parser.add_argument("--full_att_for_warmup", action="store_false")
+    parser.add_argument("--sparse_val_full", action="store_false")
 
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.1)
@@ -49,10 +53,10 @@ def parse_args():
 
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument("--warmup_steps", type=int, default=500)
-    parser.add_argument("--grad_accum_steps", type=int, default=48)
+    parser.add_argument("--warmup_steps", type=int, default=7)
+    parser.add_argument("--grad_accum_steps", type=int, default=1)
 
-    parser.add_argument("--log_every", type=int, default=100)
+    parser.add_argument("--log_every", type=int, default=3)
     parser.add_argument("--save_every", type=int, default=2499)
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--resume", type=str, default=None)
@@ -121,10 +125,14 @@ def save_checkpoint(path, model, optimizer, scheduler, global_step, epoch):
 
 
 @torch.no_grad()
-def run_validation(model, val_samples, criterion, device, use_wandb, global_step, full_eval=False):
+def run_validation(model, val_samples, criterion, device, args, global_step, full_eval=False):
     model.eval()
     val_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0}
-    num_samples = val_samples.num_samples if full_eval else 300
+    run_sparse_full = getattr(args, "sparse_val_full", False) and model.att_type == "sparse"
+    full_att_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0} if run_sparse_full else None
+    num_samples = val_samples.num_samples if full_eval else 3
+    is_warmup = global_step < getattr(args, "warmup_steps", 0)
+    full_att = getattr(args, "full_att_for_warmup", False) and is_warmup
     for _ in range(num_samples): # take 300 samples from val set
         alignment, distances = next(val_samples)
         alignment = alignment.to(device, non_blocking=True)
@@ -132,7 +140,7 @@ def run_validation(model, val_samples, criterion, device, use_wandb, global_step
         indices = np.random.randint(0, _MASK_POOL_SIZE, size=model.num_blocks) if model.att_type == "sparse" else None
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            preds = model(alignment, sparse_indices=indices)
+            preds = model(alignment, sparse_indices=indices, full_att=full_att)
             pad = model.pair_padding  # (0, 0, top, bottom)
             top, bottom = pad[2].item(), pad[3].item()
             if top > 0 or bottom > 0:
@@ -141,15 +149,35 @@ def run_validation(model, val_samples, criterion, device, use_wandb, global_step
             for name, value in metrics.items():
                 val_metrics[name] += value.item()
 
+            if run_sparse_full:
+                full_preds = model(alignment, sparse_indices=None, full_att=True)
+                if top > 0 or bottom > 0:
+                    full_preds = full_preds[:, top: full_preds.size(1) - bottom]
+                fa_metrics = compute_metrics(full_preds, distances)
+                for name, value in fa_metrics.items():
+                    full_att_metrics[name] += value.item()
+
     val_metrics = {name: value / num_samples for name, value in val_metrics.items()}
     val_loss = val_metrics[criterion]
-    if use_wandb:
-        wandb.log({
+    if run_sparse_full:
+        full_att_metrics = {name: value / num_samples for name, value in full_att_metrics.items()}
+
+    if getattr(args, "use_wandb", False):
+        log_dict = {
             "val_loss": val_loss,
             "val_mse": val_metrics["mse"],
             "val_mae": val_metrics["mae"],
             "val_mre": val_metrics["mre"],
-        }, step=global_step)
+        }
+        if run_sparse_full:
+            log_dict.update({
+                "val_full_att_loss": full_att_metrics[criterion],
+                "val_full_att_mse": full_att_metrics["mse"],
+                "val_full_att_mae": full_att_metrics["mae"],
+                "val_full_att_mre": full_att_metrics["mre"],
+            })
+        wandb.log(log_dict, step=global_step)
+
     model.train()
     return val_metrics
 
@@ -206,10 +234,12 @@ def main():
     if args.att_type == "dense":
         print(summary(model, input_size=(1, num_rows, num_cols), dtypes=[torch.long], device=str(device)))
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
     print("Starting training...")
     while global_step < total_steps:
         train_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0}
+        is_warmup = global_step < args.warmup_steps
+        full_att = args.full_att_for_warmup and is_warmup
         time_start = time.time()
         for _ in range(args.grad_accum_steps or 1):
             alignment, distances = next(train_samples)
@@ -236,7 +266,7 @@ def main():
                     else:
                         random_perm = valid_perm
 
-                preds = model(alignment, sparse_indices=indices, random_perm=random_perm)
+                preds = model(alignment, sparse_indices=indices, random_perm=random_perm, full_att=full_att)
                 # strip padding from preds
                 if top > 0 or bottom > 0:
                     preds = preds[:, top: preds.size(1) - bottom]
@@ -270,7 +300,7 @@ def main():
             }, step=global_step)
         
         if global_step % args.log_every == 0 and global_step > 0:
-            val_metrics = run_validation(model, val_samples, criterion, device, args.use_wandb, global_step)
+            val_metrics = run_validation(model, val_samples, criterion, device, args, global_step)
             val_loss = val_metrics[criterion]
             if val_loss > min_val_logged+0.15 and global_step > 2500:
                 break

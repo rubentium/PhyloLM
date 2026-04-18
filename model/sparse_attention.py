@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+import torch.nn.functional as F
 
-_MASK_POOL_SIZE = 1000
+_MASK_POOL_SIZE = 100
 
 class SparseAttention(nn.Module):
     """
@@ -116,7 +117,7 @@ class SparseAttention(nn.Module):
             ))
         return pool
 
-    def forward(self, x: torch.Tensor, idx=None, mask=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, idx=None, full_att=False, mask=None) -> torch.Tensor:
         batch_size, extra, seq_len, h_dim = x.size()
 
         q = self.query(x).view(batch_size * extra, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -125,8 +126,13 @@ class SparseAttention(nn.Module):
 
         if idx is None or (not self.training):
             idx = 0
-        block_mask = self._mask_pool[idx]
-        # print(block_mask)
-        out = flex_attention(q, k, v, block_mask=block_mask)
+
+        if full_att:
+            # full attention optimized for flash attention
+            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.drop.p if self.training else 0)
+        else:
+            block_mask = self._mask_pool[idx]
+            print(block_mask)
+            out = flex_attention(q, k, v, block_mask=block_mask)
         out = out.transpose(1, 2).contiguous().view(batch_size, extra, seq_len, h_dim)
         return self.drop(self.out(out))

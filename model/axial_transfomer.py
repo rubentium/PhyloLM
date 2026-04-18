@@ -27,7 +27,7 @@ class Attention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.rope = RotaryEmbedding(self.head_dim, seq_len=seq_len, device='cuda' if torch.cuda.is_available() else 'cpu') if use_rope else None
 
-    def forward(self, x, mask=None, idx=None):
+    def forward(self, x, mask=None, idx=None, full_att=False):
         """
         this is the flash attention implementation of attanetion due to
         axial attention it's near impossible to scale the model to anything beyond 
@@ -88,10 +88,10 @@ class Axial_Transformer(nn.Module):
             nn.Linear(h_dim * 4, h_dim)
         )
 
-    def forward(self, x, idx=None, mask=None):
+    def forward(self, x, idx=None, mask=None, full_att=False):
         # apply row-wise attention
         row_x = self.row_norm(x)
-        row_attn_out = self.row_attention(row_x.transpose(1, 2), idx=idx, mask=mask)
+        row_attn_out = self.row_attention(row_x.transpose(1, 2), idx=idx, mask=mask, full_att=full_att)
         x = x + row_attn_out.transpose(1, 2)
 
         # apply column-wise attention

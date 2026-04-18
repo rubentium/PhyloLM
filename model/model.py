@@ -32,7 +32,8 @@ class PhyloLM(nn.Module):
                               dropout, 
                               att_type=att_type, 
                               padding=self.pair_padding, 
-                              num_random_blocks=num_random_blocks) 
+                              num_random_blocks=num_random_blocks,
+                              ) 
             for _ in range(num_blocks)
         ])
 
@@ -44,7 +45,7 @@ class PhyloLM(nn.Module):
         )
         self.ultimate_ffn = nn.Linear(num_cols, 1)
 
-    def forward(self, x, sparse_indices=None, mask=None, random_perm=None):
+    def forward(self, x, sparse_indices=None, mask=None, random_perm=None, full_att=False):
         # input is (B, R, C)
         x = self.embedding(x)      # (B, R, C, H)
         x = x.permute(0, 3, 1, 2)  # (B, H, R, C)
@@ -55,7 +56,7 @@ class PhyloLM(nn.Module):
 
         x = x.permute(0, 2, 3, 1)                # (B, num_pairs, C, H)
         for i, block in enumerate(self.blocks):
-            x = block(x, idx=sparse_indices[i] if sparse_indices is not None else None, mask=mask)
+            x = block(x, idx=sparse_indices[i] if sparse_indices is not None else None, mask=mask, full_att=full_att)
             # x = torch.utils.checkpoint.checkpoint(block, x, sparse_indices[i] if sparse_indices is not None else None, mask, use_reentrant=False)
         x = self.penultimate_ffn(x).squeeze(-1)  # (B, num_pairs, C)
         x = self.ultimate_ffn(x).squeeze(-1)     # (B, num_pairs)
