@@ -17,12 +17,11 @@ from model.sparse_attention import _MASK_POOL_SIZE
 
 logger = logging.getLogger(__name__)
 
-# Dedicated RNG for sparse mask index selection, kept separate from the global
+# dedicated RNG for sparse mask index selection, kept separate from the global
 # numpy RNG so that sparse and dense runs consume identical RNG streams
 # everywhere else (data loading, permutations, etc.).
 _mask_rng: np.random.RandomState | None = None
 
-# I CHANGED THE NUMBER OF RANDOM BLOCK TO 10 FOR DEBUGGING AND TURN ON TORCH.COMPILE
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # number of pre-generated masks to pool for random selection during training,
@@ -41,14 +40,14 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=1) # you will run out of GPU VRAM if you increase this
 
-    parser.add_argument("--num_blocks", type=int, default=2)
-    parser.add_argument("--h_dim", type=int, default=32)
-    parser.add_argument("--num_heads", type=int, default=2)
+    parser.add_argument("--num_blocks", type=int, default=16)
+    parser.add_argument("--h_dim", type=int, default=128)
+    parser.add_argument("--num_heads", type=int, default=8)
     parser.add_argument("--att_type", type=str, default="sparse", choices=["sparse", "dense"])
     parser.add_argument("--num_random_blocks", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--permute_pairs", action="store_true")
-    parser.add_argument("--full_att_for_warmup", action="store_false")
+    parser.add_argument("--full_att_for_warmup", action="store_true") # this only works when att_type is sparse, warmup stabilization
     parser.add_argument("--sparse_val_full", action="store_false")
 
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -58,10 +57,10 @@ def parse_args():
 
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument("--warmup_steps", type=int, default=7)
-    parser.add_argument("--grad_accum_steps", type=int, default=1)
+    parser.add_argument("--warmup_steps", type=int, default=500)
+    parser.add_argument("--grad_accum_steps", type=int, default=48)
 
-    parser.add_argument("--log_every", type=int, default=3)
+    parser.add_argument("--log_every", type=int, default=100)
     parser.add_argument("--save_every", type=int, default=2499)
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--resume", type=str, default=None)
@@ -73,6 +72,9 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=1004)
 
     return parser.parse_args()
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 def MRE(preds, distances):
@@ -86,7 +88,7 @@ def compute_metrics(preds, distances):
         "mae": nn.functional.l1_loss(preds, distances),
         "mre": MRE(preds, distances),
     }
-
+    
 
 def build_optimizer(model, args):
     if args.optimizer == "adamw":
@@ -135,10 +137,10 @@ def run_validation(model, val_samples, criterion, device, args, global_step, ful
     val_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0}
     run_sparse_full = getattr(args, "sparse_val_full", False) and model.att_type == "sparse"
     full_att_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0} if run_sparse_full else None
-    num_samples = val_samples.num_samples if full_eval else 3
+    num_samples = val_samples.num_samples if full_eval else 300    # take 300 samples from val set
     is_warmup = global_step < getattr(args, "warmup_steps", 0)
     full_att = getattr(args, "full_att_for_warmup", False) and is_warmup
-    for _ in range(num_samples): # take 300 samples from val set
+    for _ in range(num_samples):
         alignment, distances = next(val_samples)
         alignment = alignment.to(device, non_blocking=True)
         distances = distances.to(device, non_blocking=True)
@@ -235,13 +237,17 @@ def main():
     val_samples = iter(val_iter)
     min_val_logged = float("inf")
     
+    print(f"Training configuration: {args}")
     print(f"Dataset info: train samples={train_iter.num_samples}, val samples={val_iter.num_samples}")
     print(f"Model info: num_blocks={args.num_blocks}, h_dim={args.h_dim}, num_heads={args.num_heads}, dropout={args.dropout}")
     print(f"Training info: {args.epochs} epochs ({total_steps} steps) with optimizer={args.optimizer}, lr={args.lr}, weight_decay={args.weight_decay}")
     if args.att_type == "dense":
         print(summary(model, input_size=(1, num_rows, num_cols), dtypes=[torch.long], device=str(device)))
+    else:
+        print(f"Number of trainable parameters: {count_parameters(model):,}")
 
-    # model = torch.compile(model)
+
+    model = torch.compile(model)
     print("Starting training...")
     while global_step < total_steps:
         train_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0}
@@ -309,7 +315,7 @@ def main():
         if global_step % args.log_every == 0 and global_step > 0:
             val_metrics = run_validation(model, val_samples, criterion, device, args, global_step)
             val_loss = val_metrics[criterion]
-            if val_loss > min_val_logged+0.15 and global_step > 2500:
+            if val_loss > min_val_logged+0.3 and global_step > 2500:
                 break
             
             min_val_logged = min(min_val_logged, val_loss)

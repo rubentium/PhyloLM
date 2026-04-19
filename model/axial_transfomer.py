@@ -52,11 +52,11 @@ class Attention(nn.Module):
         q = q.flatten(0, 1)  # (B*rows, H, S, D)
         k = k.flatten(0, 1)
         v = v.flatten(0, 1)
-        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=self.dropout.p if self.training else 0.0)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         out = out.view(batch_size, extra, self.num_heads, seq_len, self.head_dim)
         out = out.transpose(2, 3).contiguous().view(batch_size, extra, seq_len, h_dim)
         out = self.out(out)
-        return out
+        return self.dropout(out)
 
 
 class Axial_Transformer(nn.Module):

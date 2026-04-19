@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import torch.nn.functional as F
 
-_MASK_POOL_SIZE = 100
+_MASK_POOL_SIZE = 1000
 
 class SparseAttention(nn.Module):
     """
@@ -56,6 +56,9 @@ class SparseAttention(nn.Module):
         self.num_blocks = seq_len // block_size
         self.padding = padding
         self.num_random_blocks = max(0, min(num_random_blocks, self.num_blocks - 1))
+        # Cache as plain Python ints so forward() never calls .item() (graph-break safe)
+        self._pad_start: int = int(padding[2])
+        self._pad_end: int = int(seq_len - padding[3])
 
         self.query = nn.Linear(h_dim, h_dim)
         self.key = nn.Linear(h_dim, h_dim)
@@ -141,24 +144,26 @@ class SparseAttention(nn.Module):
             idx = 0
 
         if full_att:
-            # exclude padded rows from full-attention when sparse mode uses padded pair tensors.
-            if mask is None and (self.padding[2] > 0 or self.padding[3] > 0):
-                valid = torch.zeros(seq_len, dtype=torch.bool, device=q.device)
-                valid[int(self.padding[2]): int(seq_len - self.padding[3])] = True
-                attn_mask = valid[:, None] & valid[None, :]
-            elif mask is not None:
-                attn_mask = mask.bool()
+            if self._pad_start > 0 or self._pad_end < seq_len:
+                q_v = q[:, :, self._pad_start:self._pad_end, :]
+                k_v = k[:, :, self._pad_start:self._pad_end, :]
+                v_v = v[:, :, self._pad_start:self._pad_end, :]
+                out_v = F.scaled_dot_product_attention(
+                    q_v, k_v, v_v,
+                )
+                out = torch.zeros(
+                    q.shape[0], q.shape[1], seq_len, self.head_dim,
+                    dtype=q.dtype, device=q.device,
+                )
+                out[:, :, self._pad_start:self._pad_end, :] = out_v
             else:
-                attn_mask = None
-            out = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=attn_mask,
-                dropout_p=self.drop.p if self.training else 0,
-            )
+                out = F.scaled_dot_product_attention(
+                    q, k, v,
+                    attn_mask=mask.bool() if mask is not None else None,
+                )
         else:
             block_mask = self._mask_pool[idx]
             out = flex_attention(q, k, v, block_mask=block_mask)
         out = out.transpose(1, 2).contiguous().view(batch_size, extra, seq_len, h_dim)
-        return self.drop(self.out(out))
+        out = self.out(out)
+        return self.drop(out)
