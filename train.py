@@ -40,10 +40,10 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=1) # you will run out of GPU VRAM if you increase this
 
-    parser.add_argument("--num_blocks", type=int, default=16)
+    parser.add_argument("--num_blocks", type=int, default=10)
     parser.add_argument("--h_dim", type=int, default=128)
     parser.add_argument("--num_heads", type=int, default=8)
-    parser.add_argument("--att_type", type=str, default="sparse", choices=["sparse", "dense"])
+    parser.add_argument("--att_type", type=str, default="dense", choices=["sparse", "dense"])
     parser.add_argument("--num_random_blocks", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--permute_pairs", action="store_true")
@@ -53,7 +53,7 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.1)
     parser.add_argument("--optimizer", type=str, default="adamw", choices=["adam", "adamw", "sgd"])
-    parser.add_argument("--criterion", type=str, default="mse", choices=["mre", "mse", "mae"])
+    parser.add_argument("--criterion", type=str, default="mae", choices=["mre", "mse", "mae"])
 
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max_steps", type=int, default=None)
@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument("--grad_accum_steps", type=int, default=48)
 
     parser.add_argument("--log_every", type=int, default=100)
-    parser.add_argument("--save_every", type=int, default=2499)
+    parser.add_argument("--save_every", type=int, default=1000)
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     parser.add_argument("--resume", type=str, default=None)
 
@@ -137,7 +137,7 @@ def run_validation(model, val_samples, criterion, device, args, global_step, ful
     val_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0}
     run_sparse_full = getattr(args, "sparse_val_full", False) and model.att_type == "sparse"
     full_att_metrics = {"mse": 0.0, "mae": 0.0, "mre": 0.0} if run_sparse_full else None
-    num_samples = val_samples.num_samples if full_eval else 300    # take 300 samples from val set
+    num_samples = val_samples.num_samples if full_eval else 1000    # take 1000 samples from val set
     is_warmup = global_step < getattr(args, "warmup_steps", 0)
     full_att = getattr(args, "full_att_for_warmup", False) and is_warmup
     for _ in range(num_samples):

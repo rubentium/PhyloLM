@@ -43,7 +43,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 # make sure the package root is on the path so we can import model.data
 sys.path.insert(0, os.path.dirname(__file__))
-from .data import discover_pairs, _preprocess_one, Tokenizer
+try:
+    from .data import discover_pairs, _preprocess_one, Tokenizer
+except ImportError:
+    from data import discover_pairs, _preprocess_one, Tokenizer
 
 logging.basicConfig(
     level=logging.INFO,
