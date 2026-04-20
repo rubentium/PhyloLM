@@ -10,94 +10,29 @@ For an alignment with `R` sequences, the model predicts one scalar for each unor
 
 Those targets are patristic distances computed from the matching Newick tree. With the current dataset conventions in this repository, `R = 50`, so `P = 1225`.
 
-## Data Pipeline
-
-### Expected raw files
-
-The preprocessing code expects one alignment and one tree per sample, matched by filename stem:
-
-- `{id}_50_tips.fasta`
-- `{id}_50_tips.nwk`
-
-The FASTA and tree files are paired by the shared `{id}` prefix. Unmatched files are dropped.
-
-### Tokenization
-
-Tokenization is handled by the Hugging Face tokenizer for `facebook/esm2_t6_8M_UR50D`.
-
-- Implementation: `Tokenizer` in [data.py](./data.py)
-- Backend: `transformers.AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")`
-- Output: integer token ids shaped `(R, C)` for each alignment
-- Vocabulary size: 33 tokens, which is why alignment memmaps are stored as `int8`
-
-The FASTA parser preserves sequence order, and that same order is used when patristic distances are extracted from the Newick tree. That matters because the target vector is built over all unordered pairs in FASTA order.
-
-### Tree target creation
-
-For each `.nwk` file, the preprocessing code:
-
-1. Parses the tree with `dendropy`
-2. Builds a phylogenetic distance matrix
-3. Extracts pairwise distances for all pairs of taxa in FASTA order
-4. Stores the result as a flat vector of length `P`
-
-The pair ordering matches `torch.combinations(torch.arange(rows), r=2)` in the model, so targets and predictions line up exactly.
-
-### `.dat` file creation
-
-Run preprocessing to convert raw FASTA/Newick pairs into memory-mapped binary files:
-
-```bash
-python preprocess_memmaps.py \
-  --train_alignment_dir /path/to/train/alignments \
-  --train_tree_dir /path/to/train/trees \
-  --val_alignment_dir /path/to/val/alignments \
-  --val_tree_dir /path/to/val/trees \
-  --output_dir /path/to/LG_GC_memmaps
-```
-
-This writes the following structure:
+## Repository Structure Graph
 
 ```text
-LG_GC_memmaps/
-  train/
-    alignments.dat
-    trees.dat
-    meta.json
-  val/
-    alignments.dat
-    trees.dat
-    meta.json
+PhyloLM/
+├── model/
+│   ├── model.py
+│   ├── axial_transfomer.py
+│   ├── sparse_attention.py
+│   ├── rope.py
+│   └── memmap_data.py
+├── tests/
+│   ├── test_build_global_mask.py
+│   └── test_sparse_vs_dense.py
+├── checkpoints/
+├── wandb/
+├── data.py
+├── preprocess_memmaps.py
+├── train.py
+├── inference.py
+├── profiler.py
+├── requirements.txt
+└── README.md
 ```
-
-On-disk formats:
-
-- `alignments.dat`: `int8`, shape `(N, R, C)`
-- `trees.dat`: `int16`, shape `(N, P)`
-- `meta.json`: split metadata and tensor shapes
-
-`trees.dat` is not plain `int16` data semantically. The distances are cast to `bfloat16`, then reinterpreted as raw `int16` bits before being written. At load time they are restored with:
-
-```python
-distances = torch.from_numpy(trees_np).view(torch.bfloat16)
-```
-
-That keeps the target file compact while still using bfloat16 during training.
-
-### Runtime loading
-
-Training does not use the eager in-memory `PhyloDataset` path by default. The actual training script uses the memmap iterator in [model/memmap_data.py](./model/memmap_data.py).
-
-Key details:
-
-- Reads whole batches directly from the memmaps
-- Converts alignment tokens to `torch.int64`
-- Reinterprets tree targets as `torch.bfloat16`
-- Optionally pins memory for async GPU transfer
-- Filters corrupted all-zero samples once at startup
-- Prefetches with a background thread instead of multiprocessing workers
-
-That thread-based prefetching is deliberate: the code is written to avoid `/dev/shm` pressure from multiprocessing data loaders.
 
 ## Architecture
 
@@ -201,6 +136,95 @@ This means the current sparse path is effectively tuned to the 50-tip setting us
 - padded pairs: `1280 = 10 * 128`
 
 Dense attention has no such padding requirement.
+
+## Data Pipeline
+
+### Expected raw files
+
+The preprocessing code expects one alignment and one tree per sample, matched by filename stem:
+
+- `{id}_50_tips.fasta`
+- `{id}_50_tips.nwk`
+
+The FASTA and tree files are paired by the shared `{id}` prefix. Unmatched files are dropped.
+
+### Tokenization
+
+Tokenization is handled by the Hugging Face tokenizer for `facebook/esm2_t6_8M_UR50D`.
+
+- Implementation: `Tokenizer` in [data.py](./data.py)
+- Backend: `transformers.AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")`
+- Output: integer token ids shaped `(R, C)` for each alignment
+- Vocabulary size: 33 tokens, which is why alignment memmaps are stored as `int8`
+
+The FASTA parser preserves sequence order, and that same order is used when patristic distances are extracted from the Newick tree. That matters because the target vector is built over all unordered pairs in FASTA order.
+
+### Tree target creation
+
+For each `.nwk` file, the preprocessing code:
+
+1. Parses the tree with `dendropy`
+2. Builds a phylogenetic distance matrix
+3. Extracts pairwise distances for all pairs of taxa in FASTA order
+4. Stores the result as a flat vector of length `P`
+
+The pair ordering matches `torch.combinations(torch.arange(rows), r=2)` in the model, so targets and predictions line up exactly.
+
+### `.dat` file creation
+
+Run preprocessing to convert raw FASTA/Newick pairs into memory-mapped binary files:
+
+```bash
+python preprocess_memmaps.py \
+  --train_alignment_dir /path/to/train/alignments \
+  --train_tree_dir /path/to/train/trees \
+  --val_alignment_dir /path/to/val/alignments \
+  --val_tree_dir /path/to/val/trees \
+  --output_dir /path/to/LG_GC_memmaps
+```
+
+This writes the following structure:
+
+```text
+LG_GC_memmaps/
+  train/
+    alignments.dat
+    trees.dat
+    meta.json
+  val/
+    alignments.dat
+    trees.dat
+    meta.json
+```
+
+On-disk formats:
+
+- `alignments.dat`: `int8`, shape `(N, R, C)`
+- `trees.dat`: `int16`, shape `(N, P)`
+- `meta.json`: split metadata and tensor shapes
+
+`trees.dat` is not plain `int16` data semantically. The distances are cast to `bfloat16`, then reinterpreted as raw `int16` bits before being written. At load time they are restored with:
+
+```python
+distances = torch.from_numpy(trees_np).view(torch.bfloat16)
+```
+
+That keeps the target file compact while still using bfloat16 during training.
+
+### Runtime loading
+
+Training does not use the eager in-memory `PhyloDataset` path by default. The actual training script uses the memmap iterator in [model/memmap_data.py](./model/memmap_data.py).
+
+Key details:
+
+- Reads whole batches directly from the memmaps
+- Converts alignment tokens to `torch.int64`
+- Reinterprets tree targets as `torch.bfloat16`
+- Optionally pins memory for async GPU transfer
+- Filters corrupted all-zero samples once at startup
+- Prefetches with a background thread instead of multiprocessing workers
+
+That thread-based prefetching is deliberate: the code is written to avoid `/dev/shm` pressure from multiprocessing data loaders.
 
 ## Relationship To Phyloformer
 
