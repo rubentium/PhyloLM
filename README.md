@@ -248,6 +248,8 @@ The main implementation choices here that are more engineering-driven than paper
 
 ## Training
 
+The model was trained and is intended to be trained on Nvidia H100 80GB GPUs
+
 Install dependencies first:
 
 ```bash
