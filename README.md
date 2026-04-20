@@ -338,4 +338,4 @@ These tests check mask construction, random-block selection, sparse-vs-dense beh
 - The current sparse padding logic is specialized for 50-sequence alignments
 - Preprocessing and training both assume the FASTA leaf order and Newick leaf labels match exactly
 
-#### Author: Ruben Navasardyan, UWaterloo/EPFL
+##### Author: Ruben Navasardyan, UWaterloo/EPFL
