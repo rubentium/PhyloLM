@@ -11,6 +11,8 @@ __pycache__/
 # Test cache and outputs
 .pytest_cache/
 *.log
+*.out
+*.err
 
 # Weights & Biases experiment logs
 wandb/
